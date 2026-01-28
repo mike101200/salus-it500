@@ -1,0 +1,15 @@
+name: HACS Validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: # Allows you to run it manually
+
+jobs:
+  validate-hacs:
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: HACS validation
+        uses: "hacs/action@main"
+        with:
+          category: "integration" # Change this if your project isn't an integration
