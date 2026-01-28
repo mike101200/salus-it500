@@ -154,7 +154,7 @@ async def async_first_login(coordinator) -> list:
 
             item = SalusFirstLoginResponseItem()
             item.devId = dev_id
-            item.devName = re.sub(r'\s+', ' ', dev_name)
+            item.devName = re.sub(r"\s+", " ", dev_name)
             item.devToken = token
             devices.append(item)
 
@@ -417,9 +417,11 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
 @dataclass
 class SalusFirstLoginResponseItem:
     """Representation of a Salus Thermostat device received from the first login response."""
+
     devId: str = ""
     devName: str = ""
     devToken: str | None = None
+
 
 class SalusThermostat(CoordinatorEntity, ClimateEntity):
     """Representation of a Salus Thermostat device."""
@@ -557,4 +559,3 @@ class SalusThermostat(CoordinatorEntity, ClimateEntity):
             "manufacturer": "Salus",
             "model": "iT500",
         }
-
