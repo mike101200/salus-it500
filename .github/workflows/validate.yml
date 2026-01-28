@@ -13,3 +13,4 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration" # Change this if your project isn't an integration
+          ignore: brands
