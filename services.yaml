@@ -1,0 +1,23 @@
+set_schedule:
+  name: Set schedule
+  description: Set the weekly schedule for a device.
+  fields:
+    device_id:
+      name: Device ID
+      description: Salus device ID.
+      required: true
+      example: "123456"
+    day:
+      name: Day
+      description: Day of week (Mon, Tus, Wed, Thu, Fri, Sat, Sun).
+      required: true
+      example: "Mon"
+    entries:
+      name: Entries
+      description: List of schedule entries.
+      required: true
+      example:
+        - time: "06:30"
+          temp: 21
+        - time: "22:00"
+          temp: 17
