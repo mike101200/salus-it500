@@ -1,10 +1,14 @@
 """The Salus IT500 component."""
 from datetime import timedelta
 
+import homeassistant.helpers.config_validation as cv
+
 __version__ = "0.0.9"
 
 DOMAIN = "salus_it500"
 PLATFORMS = ["climate", "text", "number"]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 DEFAULT_NAME = "Salus IT500"
 CONF_NAME = "name"
