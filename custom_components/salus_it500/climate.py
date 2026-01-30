@@ -161,7 +161,7 @@ async def async_first_login(coordinator) -> list:
         if not devices:
             raise UpdateFailed("No devices found in login response")
 
-        _LOGGER.info("Salusfy login and get_devices OK")
+        _LOGGER.info("Salus IT500 login and get_devices OK")
         return devices
     except (ValueError, KeyError) as err:
         raise UpdateFailed(f"Invalid devices response: {err}") from err
@@ -220,7 +220,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         try:
             found = await async_first_login(temp_coordinator)
         except Exception as err:
-            _LOGGER.debug("Device rescan failed: %s", err)
+            _LOGGER.debug("Salus IT500 Device rescan failed: %s", err)
             return
 
         new_entities = []
@@ -232,7 +232,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             try:
                 await coord.async_refresh()
             except Exception as err:
-                _LOGGER.debug("Failed to init coordinator for %s: %s", dev_id, err)
+                _LOGGER.debug("Salus IT500 Failed to init coordinator for %s: %s", dev_id, err)
                 continue
             hass.data[DOMAIN][dev_id] = coord
             async_dispatcher_send(hass, SIGNAL_NEW_DEVICE, dev_id)
@@ -241,13 +241,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         if new_entities:
             async_add_entities(new_entities)
-            _LOGGER.info("Added %d new Salus climate device(s)", len(new_entities))
+            _LOGGER.info("Added %d new Salus IT500 climate device(s)", len(new_entities))
 
     async_track_time_interval(hass, _rescan_devices, NEWDEVICE_SCAN_INTERVAL)
 
 
 class SalusDataUpdateCoordinator(DataUpdateCoordinator):
-    """Coordinator to manage Salus data polling."""
+    """Coordinator to manage Salus IT500 data polling."""
 
     def __init__(self, hass, username: str, password: str, device_id: str):
         self._username = username
@@ -298,7 +298,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed("Token not found in response")
 
         self._token = result.group(1)
-        _LOGGER.info("Salusfy get_token OK")
+        _LOGGER.info("Salus IT500 get_token OK")
         return self._token
 
     async def _async_get_data(self) -> dict:
@@ -321,7 +321,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
 
         try:
             data = json.loads(text)
-            _LOGGER.info("Salusfy get_data output OK")
+            _LOGGER.info("Salus IT500 get_data output OK")
 
             status = data.get("CH1heatOnOffStatus")
             mode = data.get("CH1heatOnOff")
@@ -359,7 +359,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
         }
 
         await self._async_post(payload)
-        _LOGGER.info("Salusfy set_temperature OK")
+        _LOGGER.info("Salus IT500 set_temperature OK")
 
     async def async_set_frost(self, frost: float) -> None:
         if self._token is None:
@@ -374,7 +374,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
         }
 
         await self._async_post(payload)
-        _LOGGER.info("Salusfy set_frost OK")
+        _LOGGER.info("Salus IT500 set_frost OK")
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if self._token is None:
@@ -386,7 +386,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
             payload = {"token": self._token, "devId": self._device_id, "auto": "0", "auto_setZ1": "1"}
 
         await self._async_post(payload)
-        _LOGGER.info("Setting the HVAC mode.")
+        _LOGGER.info("Salus IT500 set_hvac_mode OK")
 
     async def async_set_schedule(self, day: str, entries: list[dict]) -> None:
         day = day.capitalize()
@@ -411,7 +411,7 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
             payload[f"z1p{day_key}{i}temp"] = entry["temp"]
 
         await self._async_post(payload, url=URL_SET_SCHEDULE)
-        _LOGGER.info("Salusfy set_schedule OK")
+        _LOGGER.info("Salus IT500 set_schedule OK")
 
 
 @dataclass

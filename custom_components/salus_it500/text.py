@@ -99,7 +99,7 @@ class SalusDayScheduleText(CoordinatorEntity, TextEntity):
                 temp = float(re.sub(r"[^\d.]", "", temp_str))
                 entries.append({"time": time_str, "temp": temp})
         except ValueError as err:
-            _LOGGER.error("Invalid schedule format for %s: %s", self._day, err)
+            _LOGGER.error("Salus IT500 Invalid schedule format for %s: %s", self._day, err)
             raise ValueError("Invalid schedule format") from err
 
         await self.coordinator.async_set_schedule(self._day, entries)
