@@ -97,25 +97,28 @@ def _build_schedule_from_payload(payload: dict) -> dict:
 
 async def async_first_login(coordinator) -> list:
     """Login to Salus IT500 and retrieve device list."""
-    payload = {
-        "IDemail": coordinator._username,
-        "password": coordinator._password,
-        "login": "Login",
-        "keep_logged_in": "1",
-    }
-    headers = {"content-type": "application/x-www-form-urlencoded"}
+    from .auth import BROWSER_HEADERS, login
+
+    # Authenticate using shared login helper
+    ok, error_msg = await login(
+        coordinator._session, coordinator._username, coordinator._password
+    )
+    if not ok:
+        raise UpdateFailed(error_msg)
+
+    # GET devices page (server redirects here after successful login)
+    devices_headers = {**BROWSER_HEADERS}
+    devices_headers["Referer"] = URL_LOGIN
 
     try:
         async with async_timeout.timeout(REQUEST_TIMEOUT):
-            async with coordinator._session.post(URL_LOGIN, data=payload, headers=headers) as resp:
-                resp.raise_for_status()
-
-        async with async_timeout.timeout(REQUEST_TIMEOUT):
-            async with coordinator._session.get(URL_GET_DEVICES) as resp:
+            async with coordinator._session.get(
+                URL_GET_DEVICES, headers=devices_headers
+            ) as resp:
                 resp.raise_for_status()
                 text = await resp.text()
     except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-        raise UpdateFailed(f"Error logging in or getting devices: {err}") from err
+        raise UpdateFailed(f"Error getting devices: {err}") from err
 
     try:
         devices: list[SalusFirstLoginResponseItem] = []
@@ -267,22 +270,22 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
         return await self._async_get_data()
 
     async def _async_get_token(self) -> str:
-        payload = {
-            "IDemail": self._username,
-            "password": self._password,
-            "login": "Login",
-            "keep_logged_in": "1",
-        }
-        headers = {"content-type": "application/x-www-form-urlencoded"}
+        from .auth import BROWSER_HEADERS, login
 
+        # Authenticate using shared login helper
+        ok, error_msg = await login(
+            self._session, self._username, self._password
+        )
+        if not ok:
+            raise UpdateFailed(error_msg)
+
+        # GET token page
+        params = {"devId": self._device_id}
         try:
             async with async_timeout.timeout(REQUEST_TIMEOUT):
-                async with self._session.post(URL_LOGIN, data=payload, headers=headers) as resp:
-                    resp.raise_for_status()
-
-            params = {"devId": self._device_id}
-            async with async_timeout.timeout(REQUEST_TIMEOUT):
-                async with self._session.get(URL_GET_TOKEN, params=params) as resp:
+                async with self._session.get(
+                    URL_GET_TOKEN, params=params, headers=BROWSER_HEADERS
+                ) as resp:
                     resp.raise_for_status()
                     text = await resp.text()
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:

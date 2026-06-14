@@ -1,0 +1,18 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Salus IT500 - Logare",
+        "data": {
+          "username": "Nume utilizator",
+          "password": "Parolă",
+          "name": "Nume"
+        },
+        "description": "Introduceți datele de conectare pentru contul Salus IT500"
+      }
+    },
+    "error": {
+      "login_failed": "Autentificare eșuată: {simple_message}"
+    }
+  }
+}
