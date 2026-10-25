@@ -13,12 +13,8 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 DEFAULT_NAME = "Salus IT500"
 CONF_NAME = "name"
 
-URL_LOGIN = "https://salus-it500.com/public/login.php"
-URL_GET_DEVICES = "https://salus-it500.com/public/devices.php"
-URL_GET_TOKEN = "https://salus-it500.com/public/control.php"
-URL_GET_DATA = "https://salus-it500.com/public/ajax_device_values.php"
-URL_SET_DATA = "https://salus-it500.com/includes/set.php"
-URL_SET_SCHEDULE = "https://salus-it500.com/includes/program.php"
+# Arrayent cloud API (same endpoints as the official Android app, see api.py)
+from .api import URL_SESSIONS, URL_ZDMAPI  # noqa: F401
 
 # Values from web interface
 MIN_TEMP = 5

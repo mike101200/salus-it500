@@ -1,17 +1,14 @@
 """
 Adds support for the Salus Thermostat units.
-"""
-import asyncio
-from dataclasses import dataclass
-import json
-import logging
-import re
-import time
 
-import aiohttp
-import async_timeout
-import homeassistant.helpers.config_validation as cv
+Talks to the Arrayent cloud API used by the official Android app
+(see api.py). The old salus-it500.com web site endpoints are gone.
+"""
+import logging
+from dataclasses import dataclass
+
 import voluptuous as vol
+import homeassistant.helpers.config_validation as cv
 from homeassistant.components.climate.const import (
     HVACAction,
     HVACMode,
@@ -21,7 +18,6 @@ from homeassistant.const import (
     ATTR_TEMPERATURE,
     CONF_PASSWORD,
     CONF_USERNAME,
-    CONF_ID,
     UnitOfTemperature,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -38,12 +34,6 @@ from . import (
     DOMAIN,
     DEFAULT_NAME,
     CONF_NAME,
-    URL_LOGIN,
-    URL_GET_DEVICES,
-    URL_GET_TOKEN,
-    URL_GET_DATA,
-    URL_SET_DATA,
-    URL_SET_SCHEDULE,
     MIN_TEMP,
     MAX_TEMP,
     SCAN_INTERVAL,
@@ -52,122 +42,59 @@ from . import (
     SCHEDULE_SERVICE,
     SIGNAL_NEW_DEVICE,
 )
+from .api import (
+    SalusApiError,
+    SalusClient,
+    ATR_ZONE1_ROOM_TEMP,
+    ATR_ZONE1_TARGET_TEMP,
+    ATR_ZONE1_HEAT_STATUS,
+    ATR_ZONE1_OFF_MODE,
+    ATR_ZONE1_MANUAL_SETPOINT,
+    ATR_SYSTEM_FROST_TEMP,
+    ZONE1_SCHEDULE_ATTRS,
+    cctt_decode,
+    cctt_encode,
+)
 
 try:
     from homeassistant.components.climate import ClimateEntity
 except ImportError:
     from homeassistant.components.climate import ClimateDevice as ClimateEntity
 
-from homeassistant.const import (
-    ATTR_TEMPERATURE,
-    CONF_PASSWORD,
-    CONF_USERNAME,
-    UnitOfTemperature,
-)
-
 _LOGGER = logging.getLogger(__name__)
 
 SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE
 SUPPORT_PRESET = []
 
-REQUEST_TIMEOUT = 20
+
+def _to_cents(value: str) -> float | None:
+    """Convert an x0.01 C attribute value (e.g. '2300') to degrees."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    return int(value) / 100.0
 
 
-def _parse_temp(value: str) -> float:
-    return float(re.sub(r"[^\d.]", "", value))
-
-
-def _build_schedule_from_payload(payload: dict) -> dict:
+def _build_schedule_from_attrs(attrs: dict) -> dict:
+    """Decode the per-day CCTT program strings into entry lists."""
     schedule = {}
-    for day in SCHEDULE_DAYS:
-        key = f"z1p{day}"
-        day_data = payload.get(key, {})
-        entries = []
-        for i in range(1, 7):
-            time_key = f"z1p{day}{i}Time"
-            temp_key = f"z1p{day}{i}Temp"
-            if time_key in day_data and temp_key in day_data:
-                entries.append({
-                    "time": day_data[time_key],
-                    "temp": _parse_temp(day_data[temp_key]),
-                })
-        schedule[day] = entries
+    for day, attr in ZONE1_SCHEDULE_ATTRS.items():
+        schedule[day] = cctt_decode(attrs.get(attr, ""))
     return schedule
 
 
 async def async_first_login(coordinator) -> list:
-    """Login to Salus IT500 and retrieve device list."""
-    from .auth import BROWSER_HEADERS, login
-
-    # Authenticate using shared login helper
-    ok, error_msg = await login(
-        coordinator._session, coordinator._username, coordinator._password
-    )
-    if not ok:
-        raise UpdateFailed(error_msg)
-
-    # GET devices page (server redirects here after successful login)
-    devices_headers = {**BROWSER_HEADERS}
-    devices_headers["Referer"] = URL_LOGIN
-
+    """Authenticate and retrieve the device list from the cloud API."""
     try:
-        async with async_timeout.timeout(REQUEST_TIMEOUT):
-            async with coordinator._session.get(
-                URL_GET_DEVICES, headers=devices_headers
-            ) as resp:
-                resp.raise_for_status()
-                text = await resp.text()
-    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-        raise UpdateFailed(f"Error getting devices: {err}") from err
+        devices = await coordinator._client.get_devices()
+    except SalusApiError as err:
+        raise UpdateFailed(err) from err
 
-    try:
-        devices: list[SalusFirstLoginResponseItem] = []
+    if not devices:
+        raise UpdateFailed("No devices found for this account")
 
-        first_div_re = re.compile(r'<div[^>]*class="deviceList\s+(\d+)"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
-        next_div_re = re.compile(r'<div[^>]*class="deviceList"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
-
-        for m in first_div_re.finditer(text):
-            first_html = m.group(2)
-
-            id_match = re.search(
-                r'<input[^>]+name=["\']devId["\'][^>]+value=["\']([^"\']+)["\']',
-                first_html,
-                re.IGNORECASE,
-            )
-            dev_id = id_match.group(1).strip() if id_match else m.group(1).strip()
-
-            name_match = re.search(
-                r'<a[^>]*class=["\'][^"\']*deviceIcon[^"\']*["\'][^>]*>(.*?)</a>',
-                first_html,
-                re.DOTALL | re.IGNORECASE,
-            )
-            dev_name = name_match.group(1).strip() if name_match else ""
-
-            token = None
-            next_m = next_div_re.search(text, pos=m.end())
-            if next_m:
-                next_html = next_m.group(1)
-                token_match = re.search(
-                    r'<input[^>]+id=["\']token["\'][^>]+value=["\']([^"\']+)["\']',
-                    next_html,
-                    re.IGNORECASE,
-                )
-                if token_match:
-                    token = token_match.group(1).strip()
-
-            item = SalusFirstLoginResponseItem()
-            item.devId = dev_id
-            item.devName = re.sub(r"\s+", " ", dev_name)
-            item.devToken = token
-            devices.append(item)
-
-        if not devices:
-            raise UpdateFailed("No devices found in login response")
-
-        _LOGGER.info("Salus IT500 login and get_devices OK")
-        return devices
-    except (ValueError, KeyError) as err:
-        raise UpdateFailed(f"Invalid devices response: {err}") from err
+    _LOGGER.info("Salus IT500 cloud login and get_devices OK (%d device(s))", len(devices))
+    return devices
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -250,14 +177,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class SalusDataUpdateCoordinator(DataUpdateCoordinator):
-    """Coordinator to manage Salus IT500 data polling."""
+    """Coordinator to manage Salus IT500 data polling via the cloud API."""
 
     def __init__(self, hass, username: str, password: str, device_id: str):
         self._username = username
         self._password = password
         self._device_id = device_id
-        self._token = None
-        self._session = async_get_clientsession(hass)
+        self._type_id = "1"
+        self._client = SalusClient(async_get_clientsession(hass), username, password)
 
         super().__init__(
             hass=hass,
@@ -269,126 +196,48 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict:
         return await self._async_get_data()
 
-    async def _async_get_token(self) -> str:
-        from .auth import BROWSER_HEADERS, login
-
-        # Authenticate using shared login helper
-        ok, error_msg = await login(
-            self._session, self._username, self._password
-        )
-        if not ok:
-            raise UpdateFailed(error_msg)
-
-        # GET token page
-        params = {"devId": self._device_id}
-        try:
-            async with async_timeout.timeout(REQUEST_TIMEOUT):
-                async with self._session.get(
-                    URL_GET_TOKEN, params=params, headers=BROWSER_HEADERS
-                ) as resp:
-                    resp.raise_for_status()
-                    text = await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise UpdateFailed(f"Error getting token: {err}") from err
-
-        # robustly parse token input regardless of attribute order
-        result = re.search(
-            r'<input[^>]*\bid=["\']token["\'][^>]*\bvalue=["\']([^"\']+)["\']',
-            text,
-            re.IGNORECASE,
-        )
-        if not result:
-            raise UpdateFailed("Token not found in response")
-
-        self._token = result.group(1)
-        _LOGGER.info("Salus IT500 get_token OK")
-        return self._token
-
     async def _async_get_data(self) -> dict:
-        if self._token is None:
-            await self._async_get_token()
+        try:
+            if not self._client.sec_token:
+                await self._client.authenticate()
+            attrs = await self._client.get_device_attributes(self._device_id, self._type_id)
+        except SalusApiError as err:
+            raise UpdateFailed(err) from err
 
-        params = {
-            "devId": self._device_id,
-            "token": self._token,
-            "&_": str(int(round(time.time() * 1000))),
+        current = _to_cents(attrs.get(ATR_ZONE1_ROOM_TEMP))
+        target = _to_cents(attrs.get(ATR_ZONE1_TARGET_TEMP))
+
+        if target is None:
+            # fall back to the manual-mode setpoint
+            target = _to_cents(attrs.get(ATR_ZONE1_MANUAL_SETPOINT))
+
+        return {
+            "target_temperature": target,
+            "current_temperature": current,
+            "frost": _to_cents(attrs.get(ATR_SYSTEM_FROST_TEMP)),
+            "status": "ON" if attrs.get(ATR_ZONE1_HEAT_STATUS) == "1" else "OFF",
+            "operation_mode": "OFF" if attrs.get(ATR_ZONE1_OFF_MODE) == "1" else "ON",
+            "schedule": _build_schedule_from_attrs(attrs),
         }
 
+    async def _set_attrs(self, attrs: dict) -> None:
         try:
-            async with async_timeout.timeout(REQUEST_TIMEOUT):
-                async with self._session.get(URL_GET_DATA, params=params) as resp:
-                    resp.raise_for_status()
-                    text = await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise UpdateFailed(f"Error getting data: {err}") from err
-
-        try:
-            data = json.loads(text)
-            _LOGGER.info("Salus IT500 get_data output OK")
-
-            status = data.get("CH1heatOnOffStatus")
-            mode = data.get("CH1heatOnOff")
-
-            return {
-                "target_temperature": float(data["CH1currentSetPoint"]),
-                "current_temperature": float(data["CH1currentRoomTemp"]),
-                "frost": float(data["frost"]),
-                "status": "ON" if status == "1" else "OFF",
-                "operation_mode": "OFF" if mode == "1" else "ON",
-                "schedule": _build_schedule_from_payload(data),
-            }
-        except (ValueError, KeyError) as err:
-            raise UpdateFailed(f"Invalid data response: {err}") from err
-
-    async def _async_post(self, payload: dict, url: str = URL_SET_DATA) -> None:
-        headers = {"content-type": "application/x-www-form-urlencoded"}
-        try:
-            async with async_timeout.timeout(REQUEST_TIMEOUT):
-                async with self._session.post(url, data=payload, headers=headers) as resp:
-                    resp.raise_for_status()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise UpdateFailed(f"Error posting data: {err}") from err
+            await self._client.set_device_attributes(self._device_id, attrs)
+        except SalusApiError as err:
+            raise UpdateFailed(err) from err
 
     async def async_set_temperature(self, temperature: float) -> None:
-        if self._token is None:
-            await self._async_get_token()
-
-        payload = {
-            "token": self._token,
-            "devId": self._device_id,
-            "tempUnit": "0",
-            "current_tempZ1_set": "1",
-            "current_tempZ1": temperature,
-        }
-
-        await self._async_post(payload)
+        await self._set_attrs({ATR_ZONE1_TARGET_TEMP: str(int(round(temperature * 100)))})
         _LOGGER.info("Salus IT500 set_temperature OK")
 
     async def async_set_frost(self, frost: float) -> None:
-        if self._token is None:
-            await self._async_get_token()
-
-        payload = {
-            "token": self._token,
-            "devId": self._device_id,
-            "tempUnit": "0",
-            "frost_temp_set": "1",
-            "frost_temp": frost,
-        }
-
-        await self._async_post(payload)
+        await self._set_attrs({ATR_SYSTEM_FROST_TEMP: str(int(round(frost * 100)))})
         _LOGGER.info("Salus IT500 set_frost OK")
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        if self._token is None:
-            await self._async_get_token()
-
-        if hvac_mode == HVACMode.OFF:
-            payload = {"token": self._token, "devId": self._device_id, "auto": "1", "auto_setZ1": "1"}
-        else:
-            payload = {"token": self._token, "devId": self._device_id, "auto": "0", "auto_setZ1": "1"}
-
-        await self._async_post(payload)
+        # A89: CH1 Off Mode (1) / running (0)
+        off = "1" if hvac_mode == HVACMode.OFF else "0"
+        await self._set_attrs({ATR_ZONE1_OFF_MODE: off})
         _LOGGER.info("Salus IT500 set_hvac_mode OK")
 
     async def async_set_schedule(self, day: str, entries: list[dict]) -> None:
@@ -396,34 +245,19 @@ class SalusDataUpdateCoordinator(DataUpdateCoordinator):
         if day not in SCHEDULE_DAYS:
             raise ValueError("Invalid day")
 
-        if self._token is None:
-            await self._async_get_token()
-
         entries = SalusThermostat._normalize_schedule_entries(entries)
-        day_key = day.lower()
-
-        payload = {
-            "token": self._token,
-            "devId": self._device_id,
-            "tempUnit": "0",
-            f"z1p{day_key}Set": "1",
-        }
-
-        for i, entry in enumerate(entries[:6], start=1):
-            payload[f"z1p{day_key}{i}time"] = entry["time"]
-            payload[f"z1p{day_key}{i}temp"] = entry["temp"]
-
-        await self._async_post(payload, url=URL_SET_SCHEDULE)
+        program = cctt_encode(entries)
+        await self._set_attrs({ZONE1_SCHEDULE_ATTRS[day]: program})
         _LOGGER.info("Salus IT500 set_schedule OK")
 
 
 @dataclass
 class SalusFirstLoginResponseItem:
-    """Representation of a Salus Thermostat device received from the first login response."""
+    """Representation of a Salus Thermostat device received from the device list."""
 
     devId: str = ""
     devName: str = ""
-    devToken: str | None = None
+    devTypeId: str = "1"
 
 
 class SalusThermostat(CoordinatorEntity, ClimateEntity):

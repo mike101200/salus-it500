@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# contains local test credentials - do not commit
+test_cloud_api.py
