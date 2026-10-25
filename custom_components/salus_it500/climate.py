@@ -86,13 +86,19 @@ def _build_schedule_from_attrs(attrs: dict) -> dict:
 async def async_first_login(coordinator) -> list:
     """Authenticate and retrieve the device list from the cloud API."""
     try:
-        devices = await coordinator._client.get_devices()
+        raw_devices = await coordinator._client.get_devices()
     except SalusApiError as err:
         raise UpdateFailed(err) from err
 
-    if not devices:
+    if not raw_devices:
         raise UpdateFailed("No devices found for this account")
 
+    devices = [
+        SalusFirstLoginResponseItem(
+            devId=d["devId"], devName=d["devName"], devTypeId=d.get("typeId", "1")
+        )
+        for d in raw_devices
+    ]
     _LOGGER.info("Salus IT500 cloud login and get_devices OK (%d device(s))", len(devices))
     return devices
 
@@ -114,6 +120,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         coord = hass.data[DOMAIN].get(device_id)
         if coord is None:
             coord = SalusDataUpdateCoordinator(hass, username, password, device_id)
+            coord._type_id = item.devTypeId
             await coord.async_refresh()
             hass.data[DOMAIN][device_id] = coord
             async_dispatcher_send(hass, SIGNAL_NEW_DEVICE, device_id)
@@ -159,6 +166,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             if dev_id in hass.data[DOMAIN]:
                 continue
             coord = SalusDataUpdateCoordinator(hass, username, password, dev_id)
+            coord._type_id = item.devTypeId
             try:
                 await coord.async_refresh()
             except Exception as err:
